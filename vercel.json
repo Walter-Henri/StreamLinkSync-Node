@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "regions": [
+    "gru1"
+  ],
+  "functions": {
+    "api/**/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "env": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONUTF8": "1"
+  }
+}
