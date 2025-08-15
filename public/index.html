@@ -1,32 +1,29 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>StreamLinkSync</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-50 text-slate-900">
 <header class="bg-sky-700 text-white p-4 shadow">
-  <div class="max-w-6xl mx-auto flex items-center justify-between">
+  <div class="max-w-5xl mx-auto flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-semibold">StreamLinkSync</h1>
-      <p class="text-sm opacity-90">Atualizações a cada 6h — Forçar atualização com segredo</p>
+      <p class="text-sm opacity-90">Atualiza links m3u8 (gate 6h) — force update com segredo</p>
     </div>
-    <div class="flex gap-2 items-center">
-      <button id="forceBtn" class="bg-rose-500 hover:bg-rose-600 text-white px-3 py-2 rounded">Forçar atualização</button>
-      <button id="refreshBtn" class="bg-white text-sky-700 border border-sky-700 px-3 py-2 rounded">Recarregar lista</button>
+    <div class="flex gap-2">
+      <button id="forceBtn" class="px-3 py-2 bg-green-500 rounded">Forçar atualização</button>
+      <button id="refreshBtn" class="px-3 py-2 bg-white text-slate-700 border rounded">Atualizar lista</button>
     </div>
   </div>
 </header>
-<main class="max-w-6xl mx-auto p-4">
-  <div class="flex gap-3 mb-4">
-    <input id="q" class="flex-1 p-2 border rounded" placeholder="Buscar..." />
+<main class="max-w-5xl mx-auto p-4">
+  <div class="mb-4 flex gap-2">
+    <input id="q" placeholder="Buscar..." class="flex-1 p-2 border rounded"/>
     <select id="sort" class="p-2 border rounded">
-      <option value="name_asc">Nome ↑</option>
-      <option value="name_desc">Nome ↓</option>
-      <option value="updated_desc">Última atualização ↓</option>
-      <option value="updated_asc">Última atualização ↑</option>
+      <option value="name">Ordenar por nome</option>
+      <option value="date">Ordenar por data (mais recentes)</option>
     </select>
   </div>
   <div id="status" class="text-sm text-slate-600 mb-3">Pronto.</div>
@@ -34,71 +31,12 @@
 </main>
 <script>
 const API_ROOT = '';
-
-function setStatus(t){ document.getElementById('status').textContent = t; }
-async function api(path, opts){ const r = await fetch(API_ROOT + path, opts); if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
-
-function sortItems(items, mode){
-  return items.sort((a,b)=>{
-    if(mode==='name_asc') return (a.name||'').localeCompare(b.name||'');
-    if(mode==='name_desc') return (b.name||'').localeCompare(a.name||'');
-    if(mode==='updated_desc') return ((b.last_updated||'').localeCompare(a.last_updated||''));
-    if(mode==='updated_asc') return ((a.last_updated||'').localeCompare(b.last_updated||''));
-    return 0;
-  });
-}
-
-async function load(){
-  setStatus('Carregando...');
-  try{
-    const data = await api('/api/live/list');
-    window._items = data;
-    render();
-    setStatus(data.length + ' canais');
-  }catch(e){ setStatus('Erro ao carregar: ' + e.message); }
-}
-
-function render(){
-  const q = document.getElementById('q').value.toLowerCase();
-  const mode = document.getElementById('sort').value;
-  let items = (window._items || []).filter(i => (i.name||'').toLowerCase().includes(q));
-  items = sortItems(items, mode);
-  const grid = document.getElementById('grid'); grid.innerHTML='';
-  items.forEach(it=>{
-    const el = document.createElement('div');
-    el.className = 'bg-white rounded shadow p-4 flex flex-col gap-2';
-    el.innerHTML = `
-      <div class="font-semibold">${it.name||'Sem nome'}</div>
-      <div class="text-xs text-slate-500 truncate">${it.m3u8_url||''}</div>
-      <div class="text-xs text-slate-500">Atualizado: ${it.last_updated||''}</div>
-      <div class="flex gap-2 mt-2">
-        <a class="px-3 py-1 bg-sky-600 text-white rounded" href="${it.m3u8_url||'#'}" target="_blank">▶ Abrir</a>
-        <button class="px-3 py-1 border rounded" onclick="copyToClipboard('${it.m3u8_url||''}')">📋 Copiar</button>
-      </div>`;
-    grid.appendChild(el);
-  });
-}
-
-function copyToClipboard(t){ navigator.clipboard.writeText(t); alert('Copiado'); }
-
-document.getElementById('q').addEventListener('input', load);
-document.getElementById('sort').addEventListener('change', render);
-document.getElementById('refreshBtn').addEventListener('click', load);
-
-document.getElementById('forceBtn').addEventListener('click', async ()=>{
-  const secret = prompt('Insira o CRON_SECRET para forçar a atualização (não será armazenado):');
-  if(!secret) return alert('Cancelado');
-  setStatus('Enviando requisição de atualização...');
-  try{
-    const res = await fetch('/api/update', { method:'GET', headers: { 'x-cron-key': secret } });
-    const body = await res.json();
-    if(!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
-    setStatus('Atualização disparada: ' + JSON.stringify(body));
-    setTimeout(load, 3000);
-  }catch(e){ setStatus('Erro: ' + e.message); }
-});
-
-load();
+const statusEl = document.getElementById('status');
+async function fetchList(){ statusEl.textContent='Carregando...'; try{ const res = await fetch(API_ROOT + '/api/live/list'); if(!res.ok) throw new Error('HTTP '+res.status); const data = await res.json(); return data; }catch(e){ statusEl.textContent='Erro ao carregar: '+e.message; return []; } }
+function render(items){ const q = document.getElementById('q').value.toLowerCase(); const sort = document.getElementById('sort').value; let arr = items.filter(i => (i.name||'').toLowerCase().includes(q)); if(sort==='date'){ arr.sort((a,b)=> (b.last_updated||'').localeCompare(a.last_updated||'')); } else { arr.sort((a,b)=>(a.name||'').localeCompare(b.name||'')); } const grid = document.getElementById('grid'); grid.innerHTML=''; arr.forEach(it=>{ const el=document.createElement('div'); el.className='bg-white rounded shadow p-4 flex flex-col gap-2'; el.innerHTML = `<div class="font-semibold">${it.name||'Sem nome'}</div><div class="text-xs text-slate-500 truncate">${it.m3u8_url||''}</div><div class="text-xs text-slate-400">Atualizado: ${it.last_updated||''}</div><div class="flex gap-2 mt-2"><a class="px-3 py-1 bg-sky-600 text-white rounded" target="_blank" href="${it.m3u8_url||'#'}">▶ Abrir</a><button class="px-3 py-1 border rounded" onclick="navigator.clipboard.writeText('${it.m3u8_url||''}')">📋 Copiar</button></div>`; grid.appendChild(el); }); statusEl.textContent = arr.length + ' canais exibidos.'; }
+document.getElementById('refreshBtn').addEventListener('click', async()=>{ const data = await fetchList(); render(data); });
+document.getElementById('forceBtn').addEventListener('click', async()=>{ const secret = prompt('Insira o CRON_SECRET (não será guardado)'); if(!secret) return alert('Operação cancelada'); statusEl.textContent='Solicitando atualização...'; try{ const res = await fetch(API_ROOT + '/api/update', { method:'GET', headers:{ 'x-cron-key': secret } }); const json = await res.json(); if(!res.ok) throw new Error(JSON.stringify(json)); statusEl.textContent = 'Atualização solicitada. Resultado: ' + JSON.stringify(json); setTimeout(async()=>{ const data = await fetchList(); render(data); }, 4000); }catch(e){ statusEl.textContent = 'Erro: ' + e.message; } });
+(async()=>{ const data = await fetchList(); render(data); })();
 </script>
 </body>
 </html>

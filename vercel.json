@@ -3,11 +3,15 @@
   "regions": [
     "gru1"
   ],
-  "public": "public",
+  "public": true,
   "functions": {
-    "api/**/*.js": {
+    "api/update.js": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/live/*.js": {
+      "maxDuration": 60,
+      "memory": 256
     }
   }
 }
