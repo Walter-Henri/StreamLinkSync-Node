@@ -48,38 +48,64 @@ async function probeForM3u8(url) {
     if (url.includes(".m3u8")) return url;
     const head = await fetch(url, { method: "HEAD", redirect: "follow" });
     const ct = head.headers.get("content-type") || "";
-    if (ct.includes("mpegurl")) return url;
+    if (ct.includes("mpegurl") || ct.includes("application/vnd.apple.mpegurl")) return url;
   } catch (e) {
     // ignore probe errors
   }
   return null;
 }
 
+async function resolveYouTubeLiveUrl(url) {
+  // Follow redirects and try to get a watch?v= id from final URL or HTML
+  try {
+    const resp = await fetch(url, { method: "GET", redirect: "follow" });
+    const final = resp.url || url;
+    const m = final.match(/watch\?v=([A-Za-z0-9_-]{11})/);
+    if (m) return `https://www.youtube.com/watch?v=${m[1]}`;
+    const html = await resp.text();
+    const mh = html.match(/watch\?v=([A-Za-z0-9_-]{11})/);
+    if (mh) return `https://www.youtube.com/watch?v=${mh[1]}`;
+  } catch (e) {
+    // ignore and return null
+  }
+  return null;
+}
+
 export async function extractLinksFromChannels(db, channels) {
-  const limit = pLimit(6);
+  const concurrency = Math.max(1, parseInt(process.env.CONCURRENCY || "1", 10));
+  const limit = pLimit(concurrency);
   const tasks = channels.map(ch => limit(async () => {
     const name = ch.name || ch.title || ch.id || ("channel_" + Math.random().toString(36).slice(2,8));
-    const url = ch.url || ch.watchUrl || ch.link;
-    if (!url) return { name, ok:false, reason:"missing-url" };
+    const rawUrl = ch.url || ch.watchUrl || ch.link;
+    if (!rawUrl) return { name, ok:false, reason:"missing-url" };
 
-    // Try YouTube
+    // If looks like a YouTube channel/live URL, attempt to resolve to a watch?v=
     try {
-      const u = new URL(url);
-      if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be")) {
-        try {
-          const info = await ytdl.getInfo(url);
-          const fmts = info.formats || [];
-          const hls = fmts.find(f => f.isHLS || (f.mimeType && (f.mimeType.includes("mpegurl") || f.mimeType.includes("vnd.apple.mpegurl"))));
-          if (hls && hls.url) return { name, ok:true, m3u8:hls.url, extractor:"ytdl-core", quality: hls.qualityLabel || null };
-        } catch (e) {
-          // fallback
+      const u = new URL(rawUrl);
+      if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be") || rawUrl.includes("/@")) {
+        const watch = await resolveYouTubeLiveUrl(rawUrl);
+        if (watch) {
+          try {
+            const info = await ytdl.getInfo(watch, { requestOptions: { headers: { 'user-agent': 'Mozilla/5.0' } } });
+            const fmts = info.formats || [];
+            const hls = fmts.find(f => f.isHLS || (f.mimeType && (f.mimeType.includes("mpegurl") || f.mimeType.includes("vnd.apple.mpegurl"))));
+            if (hls && hls.url) {
+              return { name, ok:true, m3u8:hls.url, extractor:"ytdl-core", quality: hls.qualityLabel || null };
+            }
+          } catch (e) {
+            // fallback to probe
+          }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      // ignore malformed URL
+    }
 
     // Generic probe
-    const probed = await probeForM3u8(url);
-    if (probed) return { name, ok:true, m3u8:probed, extractor:"probe", quality:null };
+    try {
+      const probed = await probeForM3u8(rawUrl);
+      if (probed) return { name, ok:true, m3u8:probed, extractor:"probe", quality:null };
+    } catch (e) {}
 
     return { name, ok:false, reason:"no-m3u8" };
   }));
