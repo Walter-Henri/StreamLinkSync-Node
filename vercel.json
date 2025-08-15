@@ -4,13 +4,9 @@
     "gru1"
   ],
   "functions": {
-    "api/update.js": {
+    "api/*.js": {
       "maxDuration": 300,
       "memory": 1024
-    },
-    "api/live/list.js": {
-      "maxDuration": 60,
-      "memory": 256
     }
   }
 }
