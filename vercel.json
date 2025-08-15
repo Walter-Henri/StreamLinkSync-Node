@@ -3,13 +3,12 @@
   "regions": [
     "gru1"
   ],
-  "public": true,
   "functions": {
     "api/update.js": {
       "maxDuration": 300,
       "memory": 1024
     },
-    "api/live/*.js": {
+    "api/live/list.js": {
       "maxDuration": 60,
       "memory": 256
     }

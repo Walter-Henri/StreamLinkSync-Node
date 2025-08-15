@@ -1,42 +1,95 @@
+
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>StreamLinkSync</title>
-<script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>StreamLinkSync</title>
+  <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-50 text-slate-900">
-<header class="bg-sky-700 text-white p-4 shadow">
-  <div class="max-w-5xl mx-auto flex items-center justify-between">
-    <div>
+  <header class="bg-sky-700 text-white p-4 shadow">
+    <div class="max-w-5xl mx-auto">
       <h1 class="text-2xl font-semibold">StreamLinkSync</h1>
-      <p class="text-sm opacity-90">Atualiza links m3u8 (gate 6h) — force update com segredo</p>
+      <p class="text-sm opacity-90">Gerencia links M3U8 (YouTube + probe). Atualização automática 6h (gate).</p>
     </div>
-    <div class="flex gap-2">
-      <button id="forceBtn" class="px-3 py-2 bg-green-500 rounded">Forçar atualização</button>
-      <button id="refreshBtn" class="px-3 py-2 bg-white text-slate-700 border rounded">Atualizar lista</button>
+  </header>
+
+  <main class="max-w-5xl mx-auto p-4">
+    <div class="flex gap-3 mb-4">
+      <input id="q" class="flex-1 p-2 border rounded" placeholder="Buscar canal..." />
+      <select id="sort" class="p-2 border rounded">
+        <option value="name">Ordenar: Nome</option>
+        <option value="recent">Ordenar: Mais recentes</option>
+      </select>
+      <button id="force" class="px-4 py-2 bg-green-600 text-white rounded">Forçar atualização</button>
     </div>
-  </div>
-</header>
-<main class="max-w-5xl mx-auto p-4">
-  <div class="mb-4 flex gap-2">
-    <input id="q" placeholder="Buscar..." class="flex-1 p-2 border rounded"/>
-    <select id="sort" class="p-2 border rounded">
-      <option value="name">Ordenar por nome</option>
-      <option value="date">Ordenar por data (mais recentes)</option>
-    </select>
-  </div>
-  <div id="status" class="text-sm text-slate-600 mb-3">Pronto.</div>
-  <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-</main>
-<script>
-const API_ROOT = '';
-const statusEl = document.getElementById('status');
-async function fetchList(){ statusEl.textContent='Carregando...'; try{ const res = await fetch(API_ROOT + '/api/live/list'); if(!res.ok) throw new Error('HTTP '+res.status); const data = await res.json(); return data; }catch(e){ statusEl.textContent='Erro ao carregar: '+e.message; return []; } }
-function render(items){ const q = document.getElementById('q').value.toLowerCase(); const sort = document.getElementById('sort').value; let arr = items.filter(i => (i.name||'').toLowerCase().includes(q)); if(sort==='date'){ arr.sort((a,b)=> (b.last_updated||'').localeCompare(a.last_updated||'')); } else { arr.sort((a,b)=>(a.name||'').localeCompare(b.name||'')); } const grid = document.getElementById('grid'); grid.innerHTML=''; arr.forEach(it=>{ const el=document.createElement('div'); el.className='bg-white rounded shadow p-4 flex flex-col gap-2'; el.innerHTML = `<div class="font-semibold">${it.name||'Sem nome'}</div><div class="text-xs text-slate-500 truncate">${it.m3u8_url||''}</div><div class="text-xs text-slate-400">Atualizado: ${it.last_updated||''}</div><div class="flex gap-2 mt-2"><a class="px-3 py-1 bg-sky-600 text-white rounded" target="_blank" href="${it.m3u8_url||'#'}">▶ Abrir</a><button class="px-3 py-1 border rounded" onclick="navigator.clipboard.writeText('${it.m3u8_url||''}')">📋 Copiar</button></div>`; grid.appendChild(el); }); statusEl.textContent = arr.length + ' canais exibidos.'; }
-document.getElementById('refreshBtn').addEventListener('click', async()=>{ const data = await fetchList(); render(data); });
-document.getElementById('forceBtn').addEventListener('click', async()=>{ const secret = prompt('Insira o CRON_SECRET (não será guardado)'); if(!secret) return alert('Operação cancelada'); statusEl.textContent='Solicitando atualização...'; try{ const res = await fetch(API_ROOT + '/api/update', { method:'GET', headers:{ 'x-cron-key': secret } }); const json = await res.json(); if(!res.ok) throw new Error(JSON.stringify(json)); statusEl.textContent = 'Atualização solicitada. Resultado: ' + JSON.stringify(json); setTimeout(async()=>{ const data = await fetchList(); render(data); }, 4000); }catch(e){ statusEl.textContent = 'Erro: ' + e.message; } });
-(async()=>{ const data = await fetchList(); render(data); })();
-</script>
+
+    <div id="status" class="text-sm text-slate-600 mb-3">Pronto.</div>
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </main>
+
+  <script>
+    const API_ROOT = '';
+
+    async function apiFetch(path, opts) {
+      const res = await fetch(API_ROOT + path, opts);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    async function loadList() {
+      const st = document.getElementById('status');
+      st.textContent = 'Carregando...';
+      try {
+        const data = await apiFetch('/api/live/list');
+        renderList(data);
+        st.textContent = `${data.length} canais`;
+      } catch (err) {
+        st.textContent = 'Erro: ' + err.message;
+      }
+    }
+
+    function renderList(items) {
+      const q = document.getElementById('q').value.toLowerCase();
+      const sort = document.getElementById('sort').value;
+      let filtered = items.filter(i => (i.name || '').toLowerCase().includes(q));
+      if (sort === 'recent') filtered.sort((a,b) => (b.last_updated||'').localeCompare(a.last_updated||''));
+      else filtered.sort((a,b) => (a.name||'').localeCompare(b.name||''));
+      const grid = document.getElementById('grid'); grid.innerHTML = '';
+      filtered.forEach(i => {
+        const el = document.createElement('div');
+        el.className = 'bg-white rounded shadow p-4 flex flex-col gap-2';
+        el.innerHTML = `
+          <div class="font-semibold">${i.name || 'Sem nome'}</div>
+          <div class="text-xs text-slate-500 truncate">${i.m3u8_url || ''}</div>
+          <div class="text-xs text-slate-500">Atualizado: ${i.last_updated || ''}</div>
+          <div class="flex gap-2">
+            <a class="px-3 py-1 bg-sky-600 text-white rounded" target="_blank" href="${i.m3u8_url||'#'}">▶ Abrir</a>
+            <button class="px-3 py-1 border rounded" onclick="navigator.clipboard.writeText('${i.m3u8_url||''}')">📋 Copiar</button>
+          </div>`;
+        grid.appendChild(el);
+      });
+    }
+
+    document.getElementById('q').addEventListener('input', loadList);
+    document.getElementById('sort').addEventListener('change', loadList);
+    document.getElementById('force').addEventListener('click', async () => {
+      const st = document.getElementById('status');
+      if (!confirm('Forçar atualização agora? Isso acionará a rotina de extração.')) return;
+      st.textContent = 'Solicitando atualização...';
+      try {
+        const res = await fetch('/api/update', { method: 'POST' });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || 'Erro');
+        st.textContent = 'Atualização executada: ' + JSON.stringify(j);
+        setTimeout(loadList, 2000);
+      } catch (e) {
+        st.textContent = 'Erro: ' + e.message;
+      }
+    });
+
+    loadList();
+  </script>
 </body>
 </html>

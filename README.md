@@ -1,3 +1,3 @@
-# StreamLinkSync - Node.js (Node 22.x) - 6h Gate + Manual Trigger
+# StreamLinkSync - Final (Node 22.x, No Auth Key)
 
-This repository contains the StreamLinkSync project adapted to Node.js (ESM), ready for Vercel deployment.
+See README in project root.
