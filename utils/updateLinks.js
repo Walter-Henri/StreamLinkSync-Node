@@ -14,19 +14,99 @@ export async function createDb() {
   return createClient({ url: dbUrl, authToken: token });
 }
 
+// --- substitua/cole esta função no utils/updateLinks.js ---
 export async function ensureSchema(db) {
-  await db.execute(`CREATE TABLE IF NOT EXISTS live_links (
-    name TEXT PRIMARY KEY,
-    url TEXT,
-    extractor TEXT,
-    quality TEXT,
-    last_updated TEXT
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  )`);
+  // esquema desejado
+  const desiredCols = [
+    { name: "name", type: "TEXT" },
+    { name: "url", type: "TEXT" },
+    { name: "extractor", type: "TEXT" },
+    { name: "quality", type: "TEXT" },
+    { name: "last_updated", type: "TEXT" }
+  ];
+
+  // 1) cria a tabela caso não exista (com todas as colunas)
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS live_links (
+      name TEXT PRIMARY KEY,
+      url TEXT,
+      extractor TEXT,
+      quality TEXT,
+      last_updated TEXT
+    )
+  `);
+
+  // 2) consulta colunas existentes
+  let info;
+  try {
+    const rs = await db.execute({ sql: "PRAGMA table_info('live_links')", args: [] });
+    info = rs.rows || [];
+  } catch (e) {
+    console.log("[migrate] PRAGMA failed:", e && (e.message || e));
+    info = [];
+  }
+  const existing = new Set(info.map(r => r.name));
+
+  // 3) detecta colunas faltantes
+  const missing = desiredCols.filter(c => !existing.has(c.name));
+  if (missing.length === 0) {
+    console.log("[migrate] live_links schema already up-to-date");
+    return;
+  }
+  console.log("[migrate] missing columns detected:", missing.map(c=>c.name));
+
+  // 4) tenta ALTER TABLE ADD COLUMN para cada coluna faltante
+  const alterErrors = [];
+  for (const col of missing) {
+    try {
+      const sql = `ALTER TABLE live_links ADD COLUMN ${col.name} ${col.type}`;
+      await db.execute({ sql, args: [] });
+      console.log("[migrate] added column:", col.name);
+    } catch (e) {
+      console.error("[migrate] ALTER TABLE failed for", col.name, e && (e.message || e));
+      alterErrors.push(col.name);
+    }
+  }
+
+  // 5) se algum ALTER TABLE falhou, fazer migração segura (cria tabela nova, copia dados)
+  if (alterErrors.length > 0) {
+    console.log("[migrate] performing fallback migration for columns:", alterErrors);
+    // nome temporário
+    const tmp = "live_links_new";
+    // cria tabela nova com esquema correto
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS ${tmp} (
+        name TEXT PRIMARY KEY,
+        url TEXT,
+        extractor TEXT,
+        quality TEXT,
+        last_updated TEXT
+      )
+    `);
+    // copia colunas compatíveis (apenas as que existem atualmente)
+    const commonCols = [...existing].filter(c => ["name","url","extractor","quality","last_updated"].includes(c));
+    const commonColsList = commonCols.length ? commonCols.join(",") : "name";
+    // insere dados existentes na nova tabela
+    try {
+      await db.execute({ sql: `INSERT OR REPLACE INTO ${tmp} (${commonColsList}) SELECT ${commonColsList} FROM live_links`, args: [] });
+    } catch (e) {
+      console.error("[migrate] copy-to-temp failed:", e && (e.message || e));
+      throw new Error("Schema migration failed during copy: " + (e && e.message));
+    }
+    // drop old and rename
+    try {
+      await db.execute({ sql: `DROP TABLE IF EXISTS live_links`, args: [] });
+      await db.execute({ sql: `ALTER TABLE ${tmp} RENAME TO live_links`, args: [] });
+      console.log("[migrate] fallback migration complete");
+    } catch (e) {
+      console.error("[migrate] rename/drop failed:", e && (e.message || e));
+      throw new Error("Schema migration failed during rename: " + (e && e.message));
+    }
+  } else {
+    console.log("[migrate] ALTER TABLE completed successfully for all missing columns.");
+  }
 }
+
 
 export async function getLastUpdate(db) {
   const rs = await db.execute({ sql: "SELECT value FROM meta WHERE key = 'last_update'", args: [] });
