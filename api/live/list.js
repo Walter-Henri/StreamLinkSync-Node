@@ -1,9 +1,25 @@
 
-import { ensureSchema } from "../../lib/db.js";
-import { json } from "../_util.js";
+import { createClient } from "@libsql/client";
 
-export default async function handler(req, res) {
-  const db = await ensureSchema();
-  const result = await db.execute("SELECT name, url, extractor, quality, last_updated, status FROM live_links ORDER BY name ASC");
-  return json(res, 200, result.rows);
+export default async function handler(req, res){
+  try{
+    const raw = process.env.TURSO_URL;
+    const token = process.env.TURSO_TOKEN;
+    if(!raw || !token){ res.statusCode=500; res.setHeader('content-type','application/json; charset=utf-8'); res.end(JSON.stringify({ok:false,error:'TURSO_URL/TURSO_TOKEN missing'})); return; }
+    const url = raw.startsWith('libsql://') ? raw.replace('libsql://','https://') : raw;
+    const db = createClient({ url, authToken: token });
+    await db.execute(`CREATE TABLE IF NOT EXISTS links (
+      name TEXT PRIMARY KEY,
+      m3u8_url TEXT,
+      extractor TEXT,
+      quality TEXT,
+      last_updated TEXT
+    )`);
+    const rs = await db.execute("SELECT name, m3u8_url as m3u8_url, extractor, quality, last_updated FROM links ORDER BY name");
+    const rows = rs.rows || [];
+    res.statusCode=200; res.setHeader('content-type','application/json; charset=utf-8'); res.end(JSON.stringify(rows));
+  }catch(err){
+    console.error('[api/live/list ERROR]', err && (err.stack||err.message||err));
+    res.statusCode=500; res.setHeader('content-type','application/json; charset=utf-8'); res.end(JSON.stringify({ok:false,error:String(err && (err.message||err))}));
+  }
 }
