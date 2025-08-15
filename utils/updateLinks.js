@@ -1,9 +1,4 @@
 // utils/updateLinks.js
-// Reescrito para ser robusto: cria/migra schema, trata meta ausente,
-// extrai m3u8 de canais do YouTube (resolvendo /@channel/live),
-// probe HEAD fallback, escreve/regrava tabela live_links.
-// Dependências: @libsql/client, ytdl-core, p-limit
-
 import ytdl from "ytdl-core";
 import pLimit from "p-limit";
 import { createClient } from "@libsql/client";
@@ -19,13 +14,8 @@ export async function createDb() {
   return createClient({ url: dbUrl, authToken: token });
 }
 
-/**
- * Cria tabela live_links e meta se necessário.
- * Detecta colunas faltantes e tenta ALTER TABLE ADD COLUMN.
- * Se ALTER falhar, faz migração segura (cria tabela temporária e copia dados).
- */
 export async function ensureSchema(db) {
-  // esquema desejado
+  // desired schema
   const desiredCols = [
     { name: "name", type: "TEXT" },
     { name: "url", type: "TEXT" },
@@ -34,7 +24,7 @@ export async function ensureSchema(db) {
     { name: "last_updated", type: "TEXT" }
   ];
 
-  // cria tabelas básicas se não existem
+  // create tables if missing
   await db.execute(`
     CREATE TABLE IF NOT EXISTS live_links (
       name TEXT PRIMARY KEY,
@@ -44,7 +34,6 @@ export async function ensureSchema(db) {
       last_updated TEXT
     )
   `);
-
   await db.execute(`
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
@@ -52,16 +41,15 @@ export async function ensureSchema(db) {
     )
   `);
 
-  // obtém colunas existentes com PRAGMA (tenta, mas protege contra falha)
+  // check existing columns
   let infoRows = [];
   try {
     const rs = await db.execute({ sql: "PRAGMA table_info('live_links')", args: [] });
     infoRows = rs.rows || [];
   } catch (e) {
-    console.warn("[ensureSchema] PRAGMA falhou:", e && (e.message || e));
+    console.warn("[ensureSchema] PRAGMA failed:", e && (e.message || e));
     infoRows = [];
   }
-
   const existing = new Set(infoRows.map(r => r.name));
   const missing = desiredCols.filter(c => !existing.has(c.name));
   if (missing.length === 0) {
@@ -69,23 +57,22 @@ export async function ensureSchema(db) {
     return;
   }
 
-  console.log("[ensureSchema] colunas faltando:", missing.map(m => m.name));
-
+  console.log("[ensureSchema] missing columns:", missing.map(m => m.name));
   const alterFailed = [];
   for (const col of missing) {
     try {
       const sql = `ALTER TABLE live_links ADD COLUMN ${col.name} ${col.type}`;
       await db.execute({ sql, args: [] });
-      console.log("[ensureSchema] adicionada coluna:", col.name);
+      console.log("[ensureSchema] added column:", col.name);
     } catch (e) {
-      console.error("[ensureSchema] ALTER TABLE falhou para", col.name, e && (e.message || e));
+      console.error("[ensureSchema] ALTER TABLE failed for", col.name, e && (e.message || e));
       alterFailed.push(col.name);
     }
   }
 
-  // fallback: migração segura se ALTER TABLE falhou
   if (alterFailed.length > 0) {
-    console.log("[ensureSchema] realizando migração fallback para:", alterFailed);
+    // fallback migration
+    console.log("[ensureSchema] performing fallback migration for:", alterFailed);
     const tmp = "live_links_new";
     await db.execute(`
       CREATE TABLE IF NOT EXISTS ${tmp} (
@@ -96,41 +83,35 @@ export async function ensureSchema(db) {
         last_updated TEXT
       )
     `);
-
-    // copia colunas compatíveis
     const commonCols = [...existing].filter(c => ["name","url","extractor","quality","last_updated"].includes(c));
     const commonColsList = commonCols.length ? commonCols.join(",") : "name";
-
     try {
       if (commonCols.length) {
         await db.execute({ sql: `INSERT OR REPLACE INTO ${tmp} (${commonColsList}) SELECT ${commonColsList} FROM live_links`, args: [] });
       }
-      // drop old and rename
       await db.execute({ sql: `DROP TABLE IF EXISTS live_links`, args: [] });
       await db.execute({ sql: `ALTER TABLE ${tmp} RENAME TO live_links`, args: [] });
-      console.log("[ensureSchema] migração fallback concluída");
+      console.log("[ensureSchema] fallback migration complete");
     } catch (e) {
-      console.error("[ensureSchema] migração fallback falhou:", e && (e.message || e));
+      console.error("[ensureSchema] fallback migration failed:", e && (e.message || e));
       throw new Error("Schema migration failed: " + (e && e.message));
     }
   } else {
-    console.log("[ensureSchema] ALTER TABLE completou com sucesso");
+    console.log("[ensureSchema] ALTER TABLE completed successfully for missing columns");
   }
 }
 
-/** Busca última atualização no meta.key = 'last_update'. Seguro contra ausência da tabela. */
 export async function getLastUpdate(db) {
   try {
     const rs = await db.execute({ sql: "SELECT value FROM meta WHERE key = 'last_update'", args: [] });
     if (!rs.rows || rs.rows.length === 0) return null;
     return rs.rows[0].value;
   } catch (e) {
-    console.warn("[getLastUpdate] SELECT falhou, assumindo null:", e && (e.message || e));
+    console.warn("[getLastUpdate] SELECT failed, returning null:", e && (e.message || e));
     return null;
   }
 }
 
-/** Define last_update na tabela meta */
 export async function setLastUpdate(db, value) {
   try {
     await db.execute({
@@ -138,28 +119,25 @@ export async function setLastUpdate(db, value) {
       args: [value]
     });
   } catch (e) {
-    console.error("[setLastUpdate] falha ao gravar meta:", e && (e.message || e));
+    console.error("[setLastUpdate] failed to write meta:", e && (e.message || e));
   }
 }
 
 function isoNow() { return new Date().toISOString(); }
 
-/** Probe HEAD para ver se o URL é um m3u8 (fallback). */
 async function probeForM3u8(url) {
   try {
     if (!url) return null;
     if (url.includes(".m3u8")) return url;
     const head = await fetch(url, { method: "HEAD", redirect: "follow" });
     const ct = (head.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("mpegurl") || ct.includes("vnd.apple.mpegurl")) return url;
+    if (ct.includes("mpegurl") || ct.includes("vnd.apple.mpegurl") || ct.includes("application/vnd.apple.mpegurl")) return url;
   } catch (e) {
-    // ignore probe errors (não falha todo o processo por causa disso)
-    console.debug("[probeForM3u8] probe falhou para", url, e && (e.message || e));
+    console.debug("[probeForM3u8] probe failed for", url, e && (e.message || e));
   }
   return null;
 }
 
-/** Resolve URLs do tipo /@channel/live ou /user/... → final watch?v=... */
 async function resolveYouTubeLiveUrl(url) {
   try {
     const resp = await fetch(url, { method: "GET", redirect: "follow" });
@@ -170,23 +148,22 @@ async function resolveYouTubeLiveUrl(url) {
     const mh = html.match(/watch\\?v=([A-Za-z0-9_-]{11})/);
     if (mh) return `https://www.youtube.com/watch?v=${mh[1]}`;
   } catch (e) {
-    console.debug("[resolveYouTubeLiveUrl] falha ao resolver", url, e && (e.message || e));
+    console.debug("[resolveYouTubeLiveUrl] failed to resolve", url, e && (e.message || e));
   }
   return null;
 }
 
 /**
- * Extrai links m3u8 a partir de um array de canais (cada item: { name, url }).
- * Reescreve completamente a tabela live_links (DELETE + INSERT) somente se a
- * janela de 6h foi ultrapassada.
+ * extractAndRewrite(channels)
+ * channels: array [{name, url}, ...]
+ * Returns: { skipped, last?, elapsed_ms?, processed, updated, failed, results: [...] }
  */
 export async function extractAndRewrite(channels) {
   if (!Array.isArray(channels)) throw new Error("channels must be an array");
-
   const db = await createDb();
   await ensureSchema(db);
 
-  // gate de 6h
+  // gate 6h
   const last = await getLastUpdate(db);
   const now = isoNow();
   if (last) {
@@ -196,7 +173,6 @@ export async function extractAndRewrite(channels) {
     }
   }
 
-  // concurrency control (por padrão 1 para Vercel Hobby)
   const concurrency = Math.max(1, parseInt(process.env.CONCURRENCY || "1", 10));
   const limit = pLimit(concurrency);
 
@@ -205,7 +181,7 @@ export async function extractAndRewrite(channels) {
     const rawUrl = ch && ch.url;
     if (!rawUrl) return { name, ok:false, reason:"missing-url" };
 
-    // 1) Se for YouTube-like, tenta resolver para watch?v= e extrair via ytdl-core
+    // try youtube resolution
     try {
       const u = new URL(rawUrl);
       if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be") || rawUrl.includes("/@") || rawUrl.includes("/user/")) {
@@ -217,22 +193,28 @@ export async function extractAndRewrite(channels) {
             const hls = fmts.find(f => f.isHLS || (f.mimeType && (f.mimeType.toLowerCase().includes('mpegurl') || f.mimeType.toLowerCase().includes('vnd.apple.mpegurl'))));
             if (hls && hls.url) {
               return { name, ok:true, url:hls.url, extractor:"ytdl-core", quality: hls.qualityLabel || null };
+            } else {
+              // include debug info: formats count
+              return { name, ok:false, reason:"ytdl-no-hls", formats: fmts.map(f => ({ itag: f.itag, mimeType: f.mimeType, isHLS: !!f.isHLS })) };
             }
           } catch (e) {
-            console.debug("[extract] ytdl getInfo falhou para", rawUrl, e && (e.message || e));
+            console.debug("[extract] ytdl.getInfo failed for", rawUrl, e && (e.message || e));
+            // continue to probe
           }
+        } else {
+          // no watch id found -> continue to probe
         }
       }
     } catch (e) {
-      // não é URL válida — processa via probe abaixo
+      // not a valid URL -> probe
     }
 
-    // 2) Probe genérico (HEAD)
+    // probe fallback
     try {
       const probed = await probeForM3u8(rawUrl);
       if (probed) return { name, ok:true, url:probed, extractor:"probe", quality:null };
     } catch (e) {
-      console.debug("[extract] probe falhou", rawUrl, e && (e.message || e));
+      console.debug("[extract] probe failed", rawUrl, e && (e.message || e));
     }
 
     return { name, ok:false, reason:"no-m3u8" };
@@ -241,11 +223,11 @@ export async function extractAndRewrite(channels) {
   const results = await Promise.all(tasks);
   const ok = results.filter(r => r.ok && r.url);
 
-  // Rewrite: delete all then insert fresh rows
+  // rewrite table
   try {
     await db.execute("DELETE FROM live_links");
   } catch (e) {
-    console.error("[extractAndRewrite] falha ao truncar live_links:", e && (e.message || e));
+    console.error("[extractAndRewrite] failed to DELETE live_links:", e && (e.message || e));
     throw e;
   }
 
@@ -254,14 +236,14 @@ export async function extractAndRewrite(channels) {
     try {
       await db.execute({
         sql: "INSERT INTO live_links (name, url, extractor, quality, last_updated) VALUES (?, ?, ?, ?, ?)",
-        args: [r.name, r.url, r.extractor, r.quality, isoNow()]
+        args: [r.name, r.url, r.extractor || null, r.quality || null, isoNow()]
       });
       updated++;
     } catch (e) {
-      console.error("[extractAndRewrite] falha ao inserir", r.name, e && (e.message || e));
+      console.error("[extractAndRewrite] failed to INSERT", r.name, e && (e.message || e));
     }
   }
 
   await setLastUpdate(db, isoNow());
-  return { skipped:false, processed: channels.length, updated, failed: results.length - ok.length };
+  return { skipped:false, processed: channels.length, updated, failed: results.length - ok.length, results };
 }
