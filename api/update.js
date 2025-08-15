@@ -13,10 +13,20 @@ async function resetCronIfConfigured() {
       headers: { "Authorization": `Bearer ${key}`, "Content-Type":"application/json" },
       body: JSON.stringify({ job: { enabled: true } })
     });
-    const j = await res.json();
-    return { ok: res.ok, status: res.status, body: j };
+    // tenta ler body com segurança:
+    let bodyText = null;
+    try {
+      bodyText = await res.text();
+    } catch (e) {
+      bodyText = null;
+    }
+    let bodyJson = null;
+    if (bodyText && bodyText.trim().length) {
+      try { bodyJson = JSON.parse(bodyText); } catch (e) { bodyJson = bodyText; }
+    }
+    return { ok: res.ok, status: res.status, body: bodyJson };
   } catch (e) {
-    return { ok:false, error: String(e) };
+    return { ok: false, error: String(e) };
   }
 }
 
