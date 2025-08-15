@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "regions": [
+    "gru1"
+  ],
+  "functions": {
+    "api/update.js": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "api/live/list.js": {
+      "maxDuration": 60,
+      "memory": 256
+    }
+  }
+}
